@@ -1,0 +1,10 @@
+{
+  "name": "stock-gauge-notifier",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ストックゲージ - 定期通知チェック用スクリプト(GitHub Actionsから実行)",
+  "main": "check-notifications.js",
+  "dependencies": {
+    "firebase-admin": "^12.1.0"
+  }
+}
