@@ -59,11 +59,16 @@ async function main(){
     if(!userRef) continue;
     const uid = userRef.id;
 
-    let token = userTokenCache.get(uid);
-    if(token === undefined){
+    let userData = userTokenCache.get(uid);
+    if(userData === undefined){
       const userSnap = await userRef.get();
-      token = userSnap.exists ? (userSnap.data().fcmToken || null) : null;
-      userTokenCache.set(uid, token);
+      userData = userSnap.exists ? userSnap.data() : {};
+      userTokenCache.set(uid, userData);
+    }
+    const token = userData.fcmToken;
+    if(!userData.notificationsEnabled){
+      console.log(`通知オフ設定: uid=${uid} (${item.name})`);
+      continue;
     }
     if(!token){
       console.log(`通知トークンなし: uid=${uid} (${item.name})`);
