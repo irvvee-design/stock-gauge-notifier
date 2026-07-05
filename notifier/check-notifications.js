@@ -76,12 +76,17 @@ async function main(){
     }
 
     const { title, body } = MESSAGES[state](item.name || "アイテム");
+    const bodyWithLink = item.ecLink ? `${body} タップしてすぐ購入できます。` : body;
 
     try{
       await admin.messaging().send({
         token,
-        notification: { title, body },
-        data: { itemId: itemDoc.id, state }
+        notification: { title, body: bodyWithLink },
+        data: {
+          itemId: itemDoc.id,
+          state,
+          ecLink: item.ecLink || ""
+        }
       });
       await itemDoc.ref.update({
         lastNotifiedAt: admin.firestore.FieldValue.serverTimestamp()
