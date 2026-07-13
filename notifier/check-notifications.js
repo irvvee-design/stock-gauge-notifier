@@ -38,9 +38,18 @@ async function main(){
   console.log("通知チェックを開始します...");
   const snapshot = await db.collectionGroup("items").get();
   const now = Date.now();
-  const userTokenCache = new Map();
+  const userDataCache = new Map();
+  const householdMembersCache = new Map();
   let sentCount = 0;
   let checkedCount = 0;
+
+  async function getUserData(uid){
+    if(userDataCache.has(uid)) return userDataCache.get(uid);
+    const snap = await db.collection("users").doc(uid).get();
+    const data = snap.exists ? snap.data() : {};
+    userDataCache.set(uid, data);
+    return data;
+  }
 
   for(const itemDoc of snapshot.docs){
     const item = itemDoc.data();
@@ -55,46 +64,65 @@ async function main(){
     const threshold = THRESHOLDS_MS[state];
     if(elapsed < threshold) continue;
 
-    const userRef = itemDoc.ref.parent.parent;
-    if(!userRef) continue;
-    const uid = userRef.id;
+    // アイテムの親ドキュメント(users/{uid} または households/{householdId})を特定
+    const parentDocRef = itemDoc.ref.parent.parent;
+    if(!parentDocRef) continue;
+    const parentCollectionId = parentDocRef.parent.id; // "users" または "households"
 
-    let userData = userTokenCache.get(uid);
-    if(userData === undefined){
-      const userSnap = await userRef.get();
-      userData = userSnap.exists ? userSnap.data() : {};
-      userTokenCache.set(uid, userData);
-    }
-    const token = userData.fcmToken;
-    if(!userData.notificationsEnabled){
-      console.log(`通知オフ設定: uid=${uid} (${item.name})`);
-      continue;
-    }
-    if(!token){
-      console.log(`通知トークンなし: uid=${uid} (${item.name})`);
-      continue;
+    // 通知の送信先uid一覧(個人アイテムは本人のみ、共有アイテムは世帯メンバー全員)
+    let recipientUids = [];
+    if(parentCollectionId === "households"){
+      const householdId = parentDocRef.id;
+      let members = householdMembersCache.get(householdId);
+      if(members === undefined){
+        const householdSnap = await parentDocRef.get();
+        members = householdSnap.exists ? (householdSnap.data().members || []) : [];
+        householdMembersCache.set(householdId, members);
+      }
+      recipientUids = members;
+    } else {
+      recipientUids = [parentDocRef.id];
     }
 
     const { title, body } = MESSAGES[state](item.name || "アイテム");
     const bodyWithLink = item.ecLink ? `${body} タップしてすぐ購入できます。` : body;
+    const displayTitle = parentCollectionId === "households" ? `【共有】${title}` : title;
 
-    try{
-      await admin.messaging().send({
-        token,
-        notification: { title, body: bodyWithLink },
-        data: {
-          itemId: itemDoc.id,
-          state,
-          ecLink: item.ecLink || ""
-        }
-      });
+    let sentToAnyone = false;
+    for(const uid of recipientUids){
+      const userData = await getUserData(uid);
+      if(!userData.notificationsEnabled){
+        console.log(`通知オフ設定: uid=${uid} (${item.name})`);
+        continue;
+      }
+      const token = userData.fcmToken;
+      if(!token){
+        console.log(`通知トークンなし: uid=${uid} (${item.name})`);
+        continue;
+      }
+
+      try{
+        await admin.messaging().send({
+          token,
+          notification: { title: displayTitle, body: bodyWithLink },
+          data: {
+            itemId: itemDoc.id,
+            state,
+            ecLink: item.ecLink || ""
+          }
+        });
+        sentToAnyone = true;
+        sentCount++;
+        console.log(`通知送信: ${item.name} (${state}) -> uid=${uid}`);
+      } catch(err){
+        console.error(`通知送信失敗: ${item.name} -> uid=${uid}`, err.message);
+      }
+    }
+
+    if(sentToAnyone){
       await itemDoc.ref.update({
         lastNotifiedAt: admin.firestore.FieldValue.serverTimestamp()
       });
-      sentCount++;
-      console.log(`通知送信: ${item.name} (${state}) -> uid=${uid}`);
-    } catch(err){
-      console.error(`通知送信失敗: ${item.name}`, err.message);
     }
   }
 
